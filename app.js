@@ -1,7 +1,7 @@
 (() => {
 "use strict";
 
-const APP_VERSION = "1.1.0";
+const APP_VERSION = "1.2.0";
 const SUPABASE_URL = "https://bdzqbwfgofulcbcprzwt.supabase.co";
 const SUPABASE_KEY = "sb_publishable_ReY8EG0t4YvPpIvL6xC_NA_tVY_Q7NJ";   // öffentlicher Schlüssel; Schutz über Zugriffsregeln in der Datenbank
 
@@ -140,7 +140,8 @@ const LS = {
   del(k) { try { localStorage.removeItem("sk." + k); } catch {} },
 };
 
-const DEFAULTS = { retention: 0.9, newPerDay: 20, maxIvl: 180, easyDays: 6 };
+// v2: kürzere Abstände (Ziel 95 % statt 90 %, „Einfach“ bei neuen Karten 4 statt 6 Tage)
+const DEFAULTS = { retention: 0.95, newPerDay: 20, maxIvl: 180, easyDays: 4, v: 2 };
 const S = {
   decks: LS.get("decks", {}),              // deckId -> {course, courseName, chapter, title, order, cards}
   progress: LS.get("progress", {}),        // cardId -> {deck, state, t, dirty}
@@ -154,6 +155,18 @@ const S = {
   login: { step: "email", busy: false, err: "" },
 };
 const cfg = () => ({ ...DEFAULTS, ...S.settings.data });
+// Ältere Einstellungen einmalig auf die kürzeren Abstände umstellen (nur Werte, die noch auf dem alten Standard stehen)
+function migrateSettings() {
+  const d = S.settings.data || {};
+  if ((d.v || 1) >= 2) return false;
+  const next = { ...d, v: 2 };
+  if (d.retention == null || d.retention === 0.9) next.retention = 0.95;
+  if (d.easyDays == null || d.easyDays === 6) next.easyDays = 4;
+  S.settings = { data: next, t: Math.max(Date.now(), S.settings.t + 1), dirty: true };
+  LS.set("settings", S.settings);
+  return true;
+}
+migrateSettings();
 const saveProgress = () => LS.set("progress", S.progress);
 const saveDecks = () => LS.set("decks", S.decks);
 
@@ -348,6 +361,7 @@ async function sync() {
     const { data: set, error: setErr } = await sb.from("settings").select("data,t").maybeSingle();
     if (setErr) throw setErr;
     if (set && Number(set.t) > S.settings.t) { S.settings = { data: { ...S.settings.data, ...set.data }, t: Number(set.t), dirty: false }; LS.set("settings", S.settings); }
+    if (migrateSettings()) scheduleSync(500);
 
     LS.set("cursors", S.cursors);
     S.lastSync = Date.now(); LS.set("lastSync", S.lastSync);
@@ -660,7 +674,8 @@ document.getElementById("set-save").onclick = () => {
       retention: clamp(+rIn.value || 0.9, 0.8, 0.97),
       newPerDay: clamp(Math.round(+document.getElementById("set-new").value || 0), 0, 500),
       maxIvl: clamp(Math.round(+document.getElementById("set-maxivl").value || 180), 7, 3650),
-      easyDays: clamp(Math.round(+document.getElementById("set-easy").value || 6), 1, 30),
+      easyDays: clamp(Math.round(+document.getElementById("set-easy").value || 4), 1, 30),
+      v: 2,
     },
     t: Math.max(Date.now(), S.settings.t + 1), dirty: true,
   };
