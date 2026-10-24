@@ -1,7 +1,7 @@
 (() => {
 "use strict";
 
-const APP_VERSION = "1.0.0";
+const APP_VERSION = "1.0.1";
 const SUPABASE_URL = "https://bdzqbwfgofulcbcprzwt.supabase.co";
 const SUPABASE_KEY = "sb_publishable_ReY8EG0t4YvPpIvL6xC_NA_tVY_Q7NJ";   // öffentlicher Schlüssel; Schutz über Zugriffsregeln in der Datenbank
 
@@ -263,7 +263,7 @@ function pickNext(sess, now) {
    Synchronisation mit Supabase
    ============================================================ */
 const sb = window.supabase && window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
-  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storageKey: "sk.auth" },
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: "implicit", storageKey: "sk.auth" },
 });
 
 let syncTimer = null;
@@ -353,26 +353,31 @@ async function sync() {
 }
 
 /* ============================================================
-   Anmeldung (Code per E-Mail, einmal pro Gerät)
+   Anmeldung (Link per E-Mail, einmal pro Gerät)
    ============================================================ */
-async function sendCode(email) {
+const APP_URL = location.origin + location.pathname;
+async function sendLink(email) {
   S.login.busy = true; S.login.err = ""; render();
-  const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
+  const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true, emailRedirectTo: APP_URL } });
   S.login.busy = false;
   if (error) {
     S.login.err = /rate|limit|seconds/i.test(error.message)
-      ? "Es wurden gerade zu viele Codes verschickt. Warte ein paar Minuten und versuch es nochmal."
-      : "Der Code konnte nicht verschickt werden: " + error.message;
-  } else { S.email = email; LS.set("email", email); S.login.step = "code"; }
+      ? "Es wurden gerade zu viele Mails verschickt. Warte ein paar Minuten und versuch es nochmal."
+      : "Die Mail konnte nicht verschickt werden: " + error.message;
+  } else { S.email = email; LS.set("email", email); S.login.step = "sent"; }
   render();
 }
-async function verifyCode(code) {
-  S.login.busy = true; S.login.err = ""; render();
-  const { data, error } = await sb.auth.verifyOtp({ email: S.email, token: code, type: "email" });
-  S.login.busy = false;
-  if (error) { S.login.err = "Der Code stimmt nicht oder ist abgelaufen. Fordere einen neuen an."; return render(); }
-  onSession(data.session);
-}
+// Fehler aus einem abgelaufenen oder schon benutzten Anmelde-Link anzeigen
+(function readLinkError() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  const err = h.get("error_description") || h.get("error");
+  if (err) {
+    S.login.err = /expired|invalid/i.test(err)
+      ? "Der Anmelde-Link ist abgelaufen oder wurde schon benutzt. Fordere einen neuen an."
+      : "Anmeldung fehlgeschlagen: " + err.replace(/\+/g, " ");
+    history.replaceState(null, "", APP_URL);
+  }
+})();
 function onSession(session) {
   S.session = session; S.authChecked = true;
   if (session) {
@@ -423,23 +428,20 @@ function renderLogin() {
   app.innerHTML = `<div class="wrap"><div class="login">
     <h1>Skriptkartei</h1>
     ${L.step === "email" ? `
-      <p>Melde dich einmal auf diesem Gerät an. Du bekommst einen Code per E-Mail, ein Passwort gibt es nicht. Danach bleibst du angemeldet und kannst auch offline lernen.</p>
+      <p>Melde dich einmal auf diesem Gerät an. Du bekommst einen Anmelde-Link per E-Mail, ein Passwort gibt es nicht. Danach bleibst du angemeldet und kannst auch offline lernen.</p>
       <form id="f-email"><label for="in-email">E-Mail-Adresse</label>
         <input id="in-email" type="email" autocomplete="email" required value="${esc(S.email)}" placeholder="name@beispiel.ch">
-        <button class="primary" type="submit" ${L.busy || offline ? "disabled" : ""}>${L.busy ? "Wird gesendet …" : "Code senden"}</button></form>
+        <button class="primary" type="submit" ${L.busy || offline ? "disabled" : ""}>${L.busy ? "Wird gesendet …" : "Anmelde-Link senden"}</button></form>
       ${offline ? `<p class="small">Für die erste Anmeldung braucht das Gerät Internet.</p>` : ""}` : `
-      <p>Wir haben einen Code an <b>${esc(S.email)}</b> geschickt. Gib ihn hier ein. Die Mail kann ein, zwei Minuten brauchen; schau auch im Spam-Ordner.</p>
-      <form id="f-code"><label for="in-code">Code aus der E-Mail</label>
-        <input id="in-code" class="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6,10}" maxlength="10" required>
-        <button class="primary" type="submit" ${L.busy ? "disabled" : ""}>${L.busy ? "Wird geprüft …" : "Anmelden"}</button></form>
-      <p class="small"><button class="linkbtn" type="button" id="back-email">Andere E-Mail-Adresse</button></p>`}
+      <p>Wir haben eine Mail an <b>${esc(S.email)}</b> geschickt (Absender Supabase, Betreff „Confirm your email address“ oder „Your Magic Link“). Die Mail kann ein, zwei Minuten brauchen; schau auch im Spam-Ordner.</p>
+      <p><b>Öffne den Link auf diesem Gerät.</b> Er öffnet die Skriptkartei, und du bist angemeldet.</p>
+      <button class="primary" type="button" id="reload">Ich habe den Link geöffnet</button>
+      <p class="small"><button class="linkbtn" type="button" id="back-email">Neue Mail anfordern oder andere Adresse</button></p>`}
     ${L.err ? `<div class="err">${esc(L.err)}</div>` : ""}
     ${S.forceLogin && Object.keys(S.decks).length ? `<p class="small"><button class="linkbtn" type="button" id="cancel-login">Ohne Anmeldung weiterlernen</button></p>` : ""}
   </div></div>`;
   const f1 = document.getElementById("f-email");
-  if (f1) f1.onsubmit = e => { e.preventDefault(); sendCode(document.getElementById("in-email").value.trim()); };
-  const f2 = document.getElementById("f-code");
-  if (f2) { f2.onsubmit = e => { e.preventDefault(); verifyCode(document.getElementById("in-code").value.trim()); }; document.getElementById("in-code").focus(); }
+  if (f1) f1.onsubmit = e => { e.preventDefault(); sendLink(document.getElementById("in-email").value.trim()); };
 }
 
 function countsHtml(c) {
@@ -598,6 +600,7 @@ document.addEventListener("click", e => {
   if (t.id === "relogin") { S.forceLogin = true; return render(); }
   if (t.id === "back-email") { S.login.step = "email"; S.login.err = ""; return render(); }
   if (t.id === "cancel-login") { S.forceLogin = false; return render(); }
+  if (t.id === "reload") { location.replace(APP_URL); return; }
   if (t.id === "study-all") return startStudy(sortedDecks().map(d => d[0]), "Alle Fächer");
   if (t.dataset.study) { const d = S.decks[t.dataset.study]; return startStudy([t.dataset.study], d.courseName + " › " + d.title); }
   if (t.dataset.studyCourse) return startStudy(sortedDecks().filter(([, d]) => d.courseName === t.dataset.studyCourse).map(x => x[0]), t.dataset.studyCourse);
