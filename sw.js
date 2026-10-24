@@ -1,6 +1,6 @@
 // Service Worker der Karteikarten-App: hält die App offline verfügbar.
 // Bei jeder Änderung an den App-Dateien VERSION erhöhen.
-const VERSION = "sk-1.2.0";
+const VERSION = "sk-1.3.0";
 const SHELL = [
   "./", "./index.html", "./app.js", "./manifest.webmanifest",
   "./vendor/supabase.js", "./vendor/tex-svg-full.js",
@@ -8,8 +8,18 @@ const SHELL = [
 ];
 const FONT_CACHE = "sk-fonts";
 
+// Beim Installieren immer frisch vom Server laden, nie aus dem Browser-Zwischenspeicher
+// (GitHub Pages erlaubt dort 10 Minuten alte Kopien, sonst landet eine alte Version im Cache).
 self.addEventListener("install", event => {
-  event.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  event.waitUntil((async () => {
+    const cache = await caches.open(VERSION);
+    await Promise.all(SHELL.map(async url => {
+      const res = await fetch(new Request(url, { cache: "reload" }));
+      if (!res.ok) throw new Error("Laden fehlgeschlagen: " + url);
+      await cache.put(url, res);
+    }));
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener("activate", event => {
@@ -43,7 +53,7 @@ self.addEventListener("fetch", event => {
   // Seite selbst: zuerst Netz (für Updates), sonst Cache
   if (req.mode === "navigate") {
     event.respondWith(
-      fetch(req).then(res => {
+      fetch(req, { cache: "no-cache" }).then(res => {
         const copy = res.clone();
         caches.open(VERSION).then(c => c.put("./index.html", copy));
         return res;
@@ -52,10 +62,13 @@ self.addEventListener("fetch", event => {
     return;
   }
 
-  // Übrige Dateien: sofort aus dem Cache, im Hintergrund auffrischen
+  // Übrige Dateien kommen aus dem Cache dieser Version. Sie werden nur beim Installieren
+  // einer neuen Version ersetzt, damit nie alte und neue Dateien gemischt werden.
   event.respondWith(caches.open(VERSION).then(async cache => {
-    const hit = await cache.match(req, { ignoreSearch: true });
-    const net = fetch(req).then(res => { if (res.ok) cache.put(req, res.clone()); return res; }).catch(() => null);
-    return hit || (await net) || Response.error();
+    const hit = await cache.match(req);
+    if (hit) return hit;
+    const res = await fetch(req, { cache: "no-cache" });
+    if (res.ok) cache.put(req, res.clone());
+    return res;
   }));
 });

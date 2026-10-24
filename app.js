@@ -1,7 +1,7 @@
 (() => {
 "use strict";
 
-const APP_VERSION = "1.2.0";
+const APP_VERSION = "1.3.0";
 const SUPABASE_URL = "https://bdzqbwfgofulcbcprzwt.supabase.co";
 const SUPABASE_KEY = "sb_publishable_ReY8EG0t4YvPpIvL6xC_NA_tVY_Q7NJ";   // öffentlicher Schlüssel; Schutz über Zugriffsregeln in der Datenbank
 
@@ -628,11 +628,12 @@ document.addEventListener("click", e => {
   if (t.id === "study-all") return startStudy(sortedDecks().map(d => d[0]), "Alle Fächer");
   if (t.dataset.study) { const d = S.decks[t.dataset.study]; return startStudy([t.dataset.study], d.courseName + " › " + d.title); }
   if (t.dataset.studyCourse) return startStudy(sortedDecks().filter(([, d]) => d.courseName === t.dataset.studyCourse).map(x => x[0]), t.dataset.studyCourse);
-  if (t.id === "back" || t.id === "back-top") { S.view = "home"; S.study = null; clearTimeout(waitTimer); return render(); }
+  if (t.id === "back" || t.id === "back-top") { if (S.updateReady) return location.reload(); S.view = "home"; S.study = null; clearTimeout(waitTimer); return render(); }
   if (t.id === "show") { S.study.shown = true; return render(); }
   if (t.dataset.grade) return grade(+t.dataset.grade);
   if (t.id === "undo") return undo();
   if (t.id === "logout") return logout();
+  if (t.id === "force-update") { if (!navigator.onLine) return toast("Für Updates braucht das Gerät Internet."); return forceUpdate(); }
 });
 
 document.addEventListener("keydown", e => {
@@ -663,7 +664,7 @@ function openSettings() {
     <div>${S.session ? "Angemeldet als <b>" + esc(S.session.user.email) + "</b>" : "Nicht angemeldet"}</div>
     <div>${Object.keys(S.decks).length} Kapitel, ${cards} Karten auf diesem Gerät · Letzte Synchronisation: ${esc(relTime(S.lastSync))}</div>
     ${S.syncError ? `<div>Letzter Fehler: ${esc(S.syncError)}</div>` : ""}
-    <div>Version ${APP_VERSION}</div>
+    <div>Version ${APP_VERSION} <button class="linkbtn" type="button" id="force-update">Nach Updates suchen</button></div>
     ${S.session ? `<button class="ghost" type="button" id="logout">Auf diesem Gerät abmelden</button>` : ""}`;
   try { dlg.showModal(); } catch { dlg.setAttribute("open", ""); }
 }
@@ -689,11 +690,33 @@ document.getElementById("set-save").onclick = () => {
    ============================================================ */
 window.addEventListener("online", () => { renderSync(); sync(); });
 window.addEventListener("offline", renderSync);
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { if (S.view === "home") render(); sync(); } });
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { if (S.view === "home") render(); sync(); checkForUpdate(); } });
 setInterval(() => { if (S.view === "home") render(); sync(); }, 120000);
 
+// Offline-Speicher und Updates: neue Versionen werden beim Öffnen gesucht und sofort aktiviert
+let swReg = null;
+async function checkForUpdate() { try { if (swReg) await swReg.update(); } catch {} }
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js").catch(() => {});
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloading = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    // Eine neue Version hat übernommen: einmal neu laden, ausser mitten in einer Lernrunde
+    if (!hadController || reloading) return;
+    if (S.view === "study" && S.study && S.study.current) { S.updateReady = true; toast("Neue Version geladen. Sie startet beim nächsten Öffnen der Übersicht."); return; }
+    reloading = true; location.reload();
+  });
+  navigator.serviceWorker.register("sw.js", { updateViaCache: "none" })
+    .then(reg => { swReg = reg; checkForUpdate(); })
+    .catch(() => {});
+}
+async function forceUpdate() {
+  toast("Suche nach Updates …");
+  try {
+    if (swReg) await swReg.update();
+    const keys = await caches.keys();
+    await Promise.all(keys.filter(k => k !== "sk-fonts").map(k => caches.delete(k)));
+  } catch {}
+  location.reload();
 }
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 
