@@ -1,6 +1,6 @@
-// Service Worker der Skriptkartei: hält die App offline verfügbar.
+// Service Worker der Karteikarten-App: hält die App offline verfügbar.
 // Bei jeder Änderung an den App-Dateien VERSION erhöhen.
-const VERSION = "sk-1.0.1";
+const VERSION = "sk-1.1.0";
 const SHELL = [
   "./", "./index.html", "./app.js", "./manifest.webmanifest",
   "./vendor/supabase.js", "./vendor/tex-svg-full.js",

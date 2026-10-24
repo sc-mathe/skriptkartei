@@ -1,4 +1,4 @@
-# Skriptkartei
+# Karteikarten (Skriptkartei)
 
 Persönliche Karteikarten-App (Web-App/PWA) mit Wiederholungen nach FSRS-5.
 Funktioniert offline; Karten und Lernstand werden über Supabase synchronisiert.

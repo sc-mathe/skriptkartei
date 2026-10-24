@@ -1,7 +1,7 @@
 (() => {
 "use strict";
 
-const APP_VERSION = "1.0.1";
+const APP_VERSION = "1.1.0";
 const SUPABASE_URL = "https://bdzqbwfgofulcbcprzwt.supabase.co";
 const SUPABASE_KEY = "sb_publishable_ReY8EG0t4YvPpIvL6xC_NA_tVY_Q7NJ";   // öffentlicher Schlüssel; Schutz über Zugriffsregeln in der Datenbank
 
@@ -17,7 +17,12 @@ const MIN = 60000, DAY = 86400000, LEARN_AHEAD = 20 * MIN;
 
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const initD = g => clamp(W[4] - Math.exp(W[5] * (g - 1)) + 1, 1, 10);
-const initS = g => Math.max(W[g - 1], 0.1);
+// Startstabilität. Für „Einfach“ bei einer neuen Karte so gewählt, dass der erste Abstand
+// genau cfg.easyDays Tage beträgt (FSRS-Standard wären gut zwei Wochen).
+function initS(g, cfg) {
+  if (g === 4 && cfg && cfg.easyDays) return cfg.easyDays * FACTOR / (Math.pow(cfg.retention, 1 / DECAY) - 1);
+  return Math.max(W[g - 1], 0.1);
+}
 function nextD(d, g) {
   const d1 = d + (-W[6] * (g - 3)) * (10 - d) / 9;
   return clamp(W[7] * initD(4) + (1 - W[7]) * d1, 1, 10);
@@ -44,7 +49,7 @@ function ivlDays(s, cfg) {
 }
 // kleine, reproduzierbare Streuung, damit nicht alle Karten am selben Tag fällig werden
 function fuzz(ivl, seed) {
-  if (ivl < 3) return ivl;
+  if (ivl < 7) return ivl;          // kurze Abstände bleiben exakt
   let h = 2166136261;
   for (const ch of seed) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
   const u = ((h >>> 0) % 10000) / 10000;
@@ -69,8 +74,12 @@ function schedule(prev, g, now, cfg, seed) {
   };
 
   if (st.s === "new") {
-    out.S = initS(g); out.D = initD(g);
-    if (g === 4) { toReview(out.S); return out; }
+    out.S = initS(g, cfg); out.D = initD(g);
+    if (g === 4) {
+      // „Einfach“ soll nie früher wiederkommen als „Gut“ nach den Lernschritten
+      const goodGrad = ivlDays(shortS(initS(3, cfg), 3), cfg);
+      toReview(out.S, goodGrad + 1); return out;
+    }
     out.s = "learning";
     if (g === 1) toStep(LEARN_STEPS, 0);
     else if (g === 2) toStep(LEARN_STEPS, 0, (LEARN_STEPS[0] + LEARN_STEPS[1]) / 2);
@@ -131,10 +140,11 @@ const LS = {
   del(k) { try { localStorage.removeItem("sk." + k); } catch {} },
 };
 
+const DEFAULTS = { retention: 0.9, newPerDay: 20, maxIvl: 180, easyDays: 6 };
 const S = {
   decks: LS.get("decks", {}),              // deckId -> {course, courseName, chapter, title, order, cards}
   progress: LS.get("progress", {}),        // cardId -> {deck, state, t, dirty}
-  settings: LS.get("settings", { data: { retention: 0.9, newPerDay: 20, maxIvl: 180 }, t: 0, dirty: false }),
+  settings: LS.get("settings", { data: { ...DEFAULTS }, t: 0, dirty: false }),
   cursors: LS.get("cursors", { decks: null, progress: null }),
   uid: LS.get("uid", null),
   email: LS.get("email", ""),
@@ -143,13 +153,13 @@ const S = {
   view: "home", study: null, undo: null,
   login: { step: "email", busy: false, err: "" },
 };
-const cfg = () => S.settings.data;
+const cfg = () => ({ ...DEFAULTS, ...S.settings.data });
 const saveProgress = () => LS.set("progress", S.progress);
 const saveDecks = () => LS.set("decks", S.decks);
 
 function resetLocal(uid) {
   S.decks = {}; S.progress = {}; S.cursors = { decks: null, progress: null };
-  S.settings = { data: { retention: 0.9, newPerDay: 20, maxIvl: 180 }, t: 0, dirty: false };
+  S.settings = { data: { ...DEFAULTS }, t: 0, dirty: false };
   S.uid = uid;
   saveDecks(); saveProgress(); LS.set("cursors", S.cursors); LS.set("settings", S.settings); LS.set("uid", uid);
 }
@@ -426,7 +436,7 @@ function renderLogin() {
   const L = S.login;
   const offline = !navigator.onLine;
   app.innerHTML = `<div class="wrap"><div class="login">
-    <h1>Skriptkartei</h1>
+    <h1>Karteikarten</h1>
     ${L.step === "email" ? `
       <p>Melde dich einmal auf diesem Gerät an. Du bekommst einen Anmelde-Link per E-Mail, ein Passwort gibt es nicht. Danach bleibst du angemeldet und kannst auch offline lernen.</p>
       <form id="f-email"><label for="in-email">E-Mail-Adresse</label>
@@ -434,7 +444,7 @@ function renderLogin() {
         <button class="primary" type="submit" ${L.busy || offline ? "disabled" : ""}>${L.busy ? "Wird gesendet …" : "Anmelde-Link senden"}</button></form>
       ${offline ? `<p class="small">Für die erste Anmeldung braucht das Gerät Internet.</p>` : ""}` : `
       <p>Wir haben eine Mail an <b>${esc(S.email)}</b> geschickt (Absender Supabase, Betreff „Confirm your email address“ oder „Your Magic Link“). Die Mail kann ein, zwei Minuten brauchen; schau auch im Spam-Ordner.</p>
-      <p><b>Öffne den Link auf diesem Gerät.</b> Er öffnet die Skriptkartei, und du bist angemeldet.</p>
+      <p><b>Öffne den Link auf diesem Gerät.</b> Er öffnet die Karteikarten-App, und du bist angemeldet.</p>
       <button class="primary" type="button" id="reload">Ich habe den Link geöffnet</button>
       <p class="small"><button class="linkbtn" type="button" id="back-email">Neue Mail anfordern oder andere Adresse</button></p>`}
     ${L.err ? `<div class="err">${esc(L.err)}</div>` : ""}
@@ -462,7 +472,7 @@ function renderHome() {
   if (!decks.length) {
     body = `<div class="empty"><h3>${S.syncing || !S.lastSync ? "Karten werden geladen …" : "Noch keine Karten"}</h3>
       <p>Hier erscheinen deine Fächer, z.B. „Analysis 1“ mit „Kapitel 3 – Konvergenz von Folgen“, jeweils mit neuen, gerade gelernten und fälligen Karten.</p>
-      <p>Neue Karten kommen dazu, wenn du Claude ein Skript schickst und darum bittest, die Karten in die Skriptkartei einzufügen.</p></div>`;
+      <p>Neue Karten kommen dazu, wenn du Claude ein Skript schickst und darum bittest, die Karten in die Karteikarten-App einzufügen.</p></div>`;
   } else {
     const byCourse = new Map();
     for (const [id, d] of decks) {
@@ -479,7 +489,7 @@ function renderHome() {
   }
 
   app.innerHTML = `<div class="wrap">
-    <header class="top"><div class="topline"><div class="brand">Skriptkartei</div>
+    <header class="top"><div class="topline"><div class="brand">Karteikarten</div>
       <button class="sync" type="button" id="sync"></button><button class="iconbtn" type="button" id="open-settings" aria-label="Einstellungen" title="Einstellungen">⚙</button></div>
       ${banner}</header>
     <div class="today">
@@ -633,6 +643,7 @@ function openSettings() {
   rIn.value = c.retention; rVal.textContent = Math.round(c.retention * 100) + " %";
   document.getElementById("set-new").value = c.newPerDay;
   document.getElementById("set-maxivl").value = c.maxIvl;
+  document.getElementById("set-easy").value = c.easyDays;
   const cards = Object.values(S.decks).reduce((n, d) => n + (d.cards || []).length, 0);
   document.getElementById("set-meta").innerHTML = `
     <div>${S.session ? "Angemeldet als <b>" + esc(S.session.user.email) + "</b>" : "Nicht angemeldet"}</div>
@@ -649,6 +660,7 @@ document.getElementById("set-save").onclick = () => {
       retention: clamp(+rIn.value || 0.9, 0.8, 0.97),
       newPerDay: clamp(Math.round(+document.getElementById("set-new").value || 0), 0, 500),
       maxIvl: clamp(Math.round(+document.getElementById("set-maxivl").value || 180), 7, 3650),
+      easyDays: clamp(Math.round(+document.getElementById("set-easy").value || 6), 1, 30),
     },
     t: Math.max(Date.now(), S.settings.t + 1), dirty: true,
   };

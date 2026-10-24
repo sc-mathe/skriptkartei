@@ -1,6 +1,6 @@
 {
-  "name": "Skriptkartei",
-  "short_name": "Skriptkartei",
+  "name": "Karteikarten",
+  "short_name": "Karteikarten",
   "description": "Karteikarten aus den Vorlesungsskripten, mit Wiederholungen nach FSRS.",
   "lang": "de",
   "start_url": "./",
