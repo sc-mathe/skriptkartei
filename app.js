@@ -1,7 +1,7 @@
 (() => {
 "use strict";
 
-const APP_VERSION = "1.3.0";
+const APP_VERSION = "1.4.0";
 const SUPABASE_URL = "https://bdzqbwfgofulcbcprzwt.supabase.co";
 const SUPABASE_KEY = "sb_publishable_ReY8EG0t4YvPpIvL6xC_NA_tVY_Q7NJ";   // öffentlicher Schlüssel; Schutz über Zugriffsregeln in der Datenbank
 
@@ -225,10 +225,19 @@ function relTime(ms) {
    ============================================================ */
 const isNew = st => !st || !st.s || st.s === "new";
 const stateOf = id => (S.progress[id] ? S.progress[id].state : null);
+// Wie viele neue Karten heute schon pro Fach eingeführt wurden (Limit gilt pro Fach, wie bei Anki)
 function newIntroducedToday(now) {
-  const today = dayIndex(now); let n = 0;
-  for (const p of Object.values(S.progress)) if (p.state && p.state.first && dayIndex(p.state.first) === today) n++;
-  return n;
+  const today = dayIndex(now), perCourse = {};
+  for (const p of Object.values(S.progress)) {
+    if (!(p.state && p.state.first && dayIndex(p.state.first) === today)) continue;
+    const course = S.decks[p.deck] ? S.decks[p.deck].courseName : "?";
+    perCourse[course] = (perCourse[course] || 0) + 1;
+  }
+  return perCourse;
+}
+function newRoom(now) {
+  const done = newIntroducedToday(now), limit = cfg().newPerDay;
+  return course => Math.max(0, limit - (done[course] || 0));
 }
 function learnedToday(now) {
   const today = dayIndex(now); let n = 0;
@@ -240,29 +249,32 @@ const sortedDecks = () => Object.entries(S.decks).sort((a, b) => (a[1].order ?? 
 function stats(deckIds, now) {
   const today = dayIndex(now);
   const endOfDay = (today + 1) * DAY + new Date(now).getTimezoneOffset() * MIN + 4 * 3600000;
-  let neu = 0, lern = 0, faellig = 0;
+  let lern = 0, faellig = 0;
+  const newPerCourse = {};
   for (const id of deckIds) {
     const deck = S.decks[id]; if (!deck) continue;
     for (const c of deck.cards || []) {
       const st = stateOf(c.id);
-      if (isNew(st)) neu++;
+      if (isNew(st)) newPerCourse[deck.courseName] = (newPerCourse[deck.courseName] || 0) + 1;
       else if (st.s === "review") { if (st.dueDay <= today) faellig++; }
       else if (st.due <= endOfDay) lern++;
     }
   }
-  const room = Math.max(0, cfg().newPerDay - newIntroducedToday(now));
-  return { neu: Math.min(neu, room), lern, faellig };
+  const room = newRoom(now);
+  const neu = Object.entries(newPerCourse).reduce((n, [course, k]) => n + Math.min(k, room(course)), 0);
+  return { neu, lern, faellig };
 }
 
 function pickNext(sess, now) {
   const today = dayIndex(now);
   let learnNow = null, learnSoon = null, review = null, fresh = null, learnLater = null;
+  const room = newRoom(now);
   for (const id of sess.deckIds) {
     const deck = S.decks[id]; if (!deck) continue;
     for (const c of deck.cards || []) {
       const st = stateOf(c.id);
       const item = { deckId: id, card: c };
-      if (isNew(st)) { if (!fresh) fresh = item; continue; }
+      if (isNew(st)) { if (!fresh && room(deck.courseName) > 0) fresh = item; continue; }
       if (st.s === "review") {
         if (st.dueDay <= today && (!review || st.dueDay < review.key)) review = { ...item, key: st.dueDay };
         continue;
@@ -272,7 +284,6 @@ function pickNext(sess, now) {
       else if (!learnLater || st.due < learnLater.key) learnLater = { ...item, key: st.due };
     }
   }
-  if (cfg().newPerDay - newIntroducedToday(now) <= 0) fresh = null;
   if (learnNow) return learnNow;
   if (review && fresh) return sess.answered % 4 === 3 ? fresh : review;
   if (review) return review;
